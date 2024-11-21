@@ -18,20 +18,23 @@ import 'package:xml/xml.dart' as xml;
 
 // Função principal
 Future<String> gerarCertificado(
-    String svgUrl,
-    String cor,
-    String aluno,
-    bool isCurso,
-    String teacher,
-    String date,
-    String duration,
-    String curso,
-    String code,
-    bool hasLogo, // Variável para verificar se a logo deve ser incluída
-    String? logoUrl, // URL da logo
-    String mainText, // Texto principal
-    String authenticationCode // Código de autenticação
-    ) async {
+  String svgUrl,
+  String cor,
+  String aluno,
+  bool isCurso,
+  String teacher,
+  String date,
+  String duration,
+  String curso,
+  String code,
+  bool hasLogo, // Variável para verificar se a logo deve ser incluída
+  String? logoUrl, // URL da logo
+  String mainText, // Texto principal com templates
+  String authenticationCode, // Código de autenticação
+  bool hasProfissional, // Novo booleano
+  bool hasDate,
+  bool hasDuration,
+) async {
   final pdf = pw.Document();
 
   if (svgUrl.isEmpty) {
@@ -56,139 +59,109 @@ Future<String> gerarCertificado(
     // Determina 'type'
     String type = isCurso ? 'Curso' : 'Treinamento';
 
-    // Substituição de placeholders nas variáveis mainText e authenticationCode
+    // Mapa de variáveis
     Map<String, String> variables = {
-      '{aluno}': aluno,
-      '{c-type}': type,
-      '{teacher}': teacher,
-      '{date}': date,
-      '{duration}': duration,
-      '{c-name}': curso,
-      '{code}': code,
+      'aluno': aluno.trim(),
+      'c-type': type.trim(),
+      'teacher': teacher.trim(),
+      'date': date.trim(),
+      'duration': duration.trim(),
+      'c-name': curso.trim(),
+      'code': code.trim(),
     };
 
-    // Substitui variáveis no mainText
-    variables.forEach((placeholder, value) {
-      mainText = mainText.replaceAll(placeholder, value);
-    });
+    // Mapa de condições
+    Map<String, bool> conditions = {
+      'hasProfissional': hasProfissional,
+      'hasDate': hasDate,
+      'hasDuration': hasDuration,
+    };
 
-    // Substitui variáveis no authenticationCode
-    variables.forEach((placeholder, value) {
-      authenticationCode = authenticationCode.replaceAll(placeholder, value);
-    });
+    // Função para processar o template
+    String processTemplate(String template, Map<String, String> variables,
+        Map<String, bool> conditions) {
+      // Processa as seções condicionais
+      RegExp regExp =
+          RegExp(r'\{\?(\w+)\}(.*?)\{\/\1\}', multiLine: true, dotAll: true);
+      while (regExp.hasMatch(template)) {
+        template = template.replaceAllMapped(regExp, (match) {
+          String condition = match.group(1)!;
+          String content = match.group(2)!;
+          bool include = conditions[condition] ?? false;
+          return include ? content : '';
+        });
+      }
+
+      // Substitui os placeholders pelas variáveis correspondentes
+      variables.forEach((key, value) {
+        template = template.replaceAll('{$key}', value);
+      });
+
+      // Remove espaços extras e retorna o texto final
+      return template.replaceAll(RegExp(r'\s+'), ' ').trim();
+    }
+
+    // Processa o mainText usando a função processTemplate
+    mainText = processTemplate(mainText, variables, conditions);
+
+    // Processa o authenticationCode (caso tenha placeholders)
+    authenticationCode =
+        processTemplate(authenticationCode, variables, conditions);
 
     // Parse do SVG
     final svgXml = xml.XmlDocument.parse(svgContent);
 
-    // Encontrar e processar os placeholders gráficos
+    // Lista para armazenar os IDs dos placeholders a serem removidos
+    List<String> placeholdersToRemove = [];
 
-    // Encontrar 'aluno_placeholder'
-    xml.XmlElement? alunoPlaceholder;
-    final alunoElements = svgXml.findAllElements('g').where(
-          (element) => element.getAttribute('id') == 'aluno_placeholder',
-        );
-    if (alunoElements.isNotEmpty) {
-      alunoPlaceholder = alunoElements.first;
-    } else {
-      alunoPlaceholder = null;
-    }
+    // Função auxiliar para extrair informações do placeholder
+    Map<String, dynamic>? extractPlaceholderInfo(String placeholderId) {
+      final elements = svgXml.findAllElements('g').where(
+            (element) => element.getAttribute('id') == placeholderId,
+          );
+      if (elements.isNotEmpty) {
+        final placeholderElement = elements.first;
+        placeholdersToRemove.add(placeholderId); // Marcar para remoção
 
-    double alunoPosX = 0, alunoPosY = 0, alunoWidth = 0, alunoHeight = 0;
-    if (alunoPlaceholder != null) {
-      final alunoRectElement = alunoPlaceholder.findElements('rect').first;
-      alunoWidth = double.parse(alunoRectElement.getAttribute('width') ?? '0');
-      alunoHeight = double.parse(alunoRectElement.getAttribute('height') ?? '0');
-      final alunoTransform = alunoRectElement.getAttribute('transform') ?? '';
-      final alunoTranslateMatch =
-          RegExp(r'translate\(([\d\.]+)[,\s]+([\d\.]+)\)')
-              .firstMatch(alunoTransform);
+        final rectElement = placeholderElement.findElements('rect').first;
+        double width = double.parse(rectElement.getAttribute('width') ?? '0');
+        double height = double.parse(rectElement.getAttribute('height') ?? '0');
+        final transform = rectElement.getAttribute('transform') ?? '';
+        final translateMatch = RegExp(r'translate\(([\d\.]+)[,\s]+([\d\.]+)\)')
+            .firstMatch(transform);
 
-      if (alunoTranslateMatch != null) {
-        alunoPosX = double.parse(alunoTranslateMatch.group(1) ?? '0');
-        alunoPosY = double.parse(alunoTranslateMatch.group(2) ?? '0');
+        double posX = 0, posY = 0;
+        if (translateMatch != null) {
+          posX = double.parse(translateMatch.group(1) ?? '0');
+          posY = double.parse(translateMatch.group(2) ?? '0');
+        }
+
+        return {
+          'posX': posX,
+          'posY': posY,
+          'width': width,
+          'height': height,
+        };
+      } else {
+        return null;
       }
     }
 
-    // Encontrar 'main_placeholder'
-    xml.XmlElement? mainPlaceholder;
-    final mainElements = svgXml.findAllElements('g').where(
-          (element) => element.getAttribute('id') == 'main_placeholder',
-        );
-    if (mainElements.isNotEmpty) {
-      mainPlaceholder = mainElements.first;
-    } else {
-      mainPlaceholder = null;
-    }
+    // Extrair informações dos placeholders e marcar para remoção
+    var alunoInfo = extractPlaceholderInfo('aluno_placeholder');
+    var mainInfo = extractPlaceholderInfo('main_placeholder');
+    var codeInfo = extractPlaceholderInfo('code_placeholder');
+    var imageInfo = extractPlaceholderInfo('image_placeholder');
 
-    double mainPosX = 0, mainPosY = 0, mainWidth = 0, mainHeight = 0;
-    if (mainPlaceholder != null) {
-      final mainRectElement = mainPlaceholder.findElements('rect').first;
-      mainWidth = double.parse(mainRectElement.getAttribute('width') ?? '0');
-      mainHeight = double.parse(mainRectElement.getAttribute('height') ?? '0');
-      final mainTransform = mainRectElement.getAttribute('transform') ?? '';
-      final mainTranslateMatch =
-          RegExp(r'translate\(([\d\.]+)[,\s]+([\d\.]+)\)')
-              .firstMatch(mainTransform);
-
-      if (mainTranslateMatch != null) {
-        mainPosX = double.parse(mainTranslateMatch.group(1) ?? '0');
-        mainPosY = double.parse(mainTranslateMatch.group(2) ?? '0');
+    // Remover os placeholders do SVG
+    placeholdersToRemove.forEach((placeholderId) {
+      final elements = svgXml.findAllElements('g').where(
+            (element) => element.getAttribute('id') == placeholderId,
+          );
+      if (elements.isNotEmpty) {
+        elements.first.parent?.children.remove(elements.first);
       }
-    }
-
-    // **Novo código: Encontrar 'image_placeholder'**
-    xml.XmlElement? imagePlaceholder;
-    final imageElements = svgXml.findAllElements('g').where(
-          (element) => element.getAttribute('id') == 'image_placeholder',
-        );
-    if (imageElements.isNotEmpty) {
-      imagePlaceholder = imageElements.first;
-    } else {
-      imagePlaceholder = null;
-    }
-
-    double imagePosX = 0, imagePosY = 0, imageWidth = 0, imageHeight = 0;
-    if (imagePlaceholder != null) {
-      final imageRectElement = imagePlaceholder.findElements('rect').first;
-      imageWidth = double.parse(imageRectElement.getAttribute('width') ?? '0');
-      imageHeight = double.parse(imageRectElement.getAttribute('height') ?? '0');
-      final imageTransform = imageRectElement.getAttribute('transform') ?? '';
-      final imageTranslateMatch =
-          RegExp(r'translate\(([\d\.]+)[,\s]+([\d\.]+)\)')
-              .firstMatch(imageTransform);
-
-      if (imageTranslateMatch != null) {
-        imagePosX = double.parse(imageTranslateMatch.group(1) ?? '0');
-        imagePosY = double.parse(imageTranslateMatch.group(2) ?? '0');
-      }
-    }
-
-    // Encontrar 'code_placeholder'
-    xml.XmlElement? codePlaceholder;
-    final codeElements = svgXml.findAllElements('g').where(
-          (element) => element.getAttribute('id') == 'code_placeholder',
-        );
-    if (codeElements.isNotEmpty) {
-      codePlaceholder = codeElements.first;
-    } else {
-      codePlaceholder = null;
-    }
-
-    double codePosX = 0, codePosY = 0, codeWidth = 0, codeHeight = 0;
-    if (codePlaceholder != null) {
-      final codeRectElement = codePlaceholder.findElements('rect').first;
-      codeWidth = double.parse(codeRectElement.getAttribute('width') ?? '0');
-      codeHeight = double.parse(codeRectElement.getAttribute('height') ?? '0');
-      final codeTransform = codeRectElement.getAttribute('transform') ?? '';
-      final codeTranslateMatch =
-          RegExp(r'translate\(([\d\.]+)[,\s]+([\d\.]+)\)')
-              .firstMatch(codeTransform);
-
-      if (codeTranslateMatch != null) {
-        codePosX = double.parse(codeTranslateMatch.group(1) ?? '0');
-        codePosY = double.parse(codeTranslateMatch.group(2) ?? '0');
-      }
-    }
+    });
 
     // Converte o SVG modificado de volta para string
     svgContent = svgXml.toXmlString();
@@ -236,8 +209,8 @@ Future<String> gerarCertificado(
         build: (pw.Context context) {
           // Definir tamanhos de fonte
           double maxMainFontSize = 84; // Ajuste este valor conforme necessário
-          double alunoFontSize = alunoHeight * 0.5;
-          double codeFontSize = codeHeight * 0.5; // Ajuste conforme necessário
+          double alunoFontSize = (alunoInfo?['height'] ?? 0) * 0.5;
+          double codeFontSize = (codeInfo?['height'] ?? 0) * 0.5;
 
           return pw.Stack(
             children: [
@@ -251,28 +224,28 @@ Future<String> gerarCertificado(
                   height: height,
                 ),
               ),
-              // **Adiciona a logo, se houver**
-              if (hasLogo && logoImage != null && imagePlaceholder != null)
+              // Adiciona a logo, se houver
+              if (hasLogo && logoImage != null && imageInfo != null)
                 pw.Positioned(
-                  left: imagePosX,
-                  top: imagePosY,
+                  left: imageInfo['posX'],
+                  top: imageInfo['posY'],
                   child: pw.Image(
                     logoImage,
-                    width: imageWidth,
-                    height: imageHeight,
+                    width: imageInfo['width'],
+                    height: imageInfo['height'],
                   ),
                 ),
               // Adiciona o texto "aluno", se o placeholder existir
-              if (alunoPlaceholder != null)
+              if (alunoInfo != null)
                 pw.Positioned(
-                  left: alunoPosX,
-                  top: alunoPosY,
+                  left: alunoInfo['posX'],
+                  top: alunoInfo['posY'],
                   child: pw.Container(
-                    width: alunoWidth,
-                    height: alunoHeight,
+                    width: alunoInfo['width'],
+                    height: alunoInfo['height'],
                     alignment: pw.Alignment.centerLeft,
                     child: pw.Text(
-                      aluno,
+                      aluno.trim(),
                       style: pw.TextStyle(
                         fontSize: alunoFontSize,
                         fontWeight: pw.FontWeight.normal,
@@ -283,41 +256,42 @@ Future<String> gerarCertificado(
                   ),
                 ),
               // Adiciona o texto "mainText", se o placeholder existir
-              if (mainPlaceholder != null)
+              if (mainInfo != null)
                 pw.Positioned(
-                  left: mainPosX,
-                  top: mainPosY,
+                  left: mainInfo['posX'],
+                  top: mainInfo['posY'],
                   child: pw.Container(
-                    width: mainWidth,
-                    height: mainHeight,
+                    width: mainInfo['width'],
+                    height: mainInfo['height'],
                     alignment: pw.Alignment.topLeft,
                     child: pw.Text(
-                      mainText,
+                      mainText.trim(),
                       style: pw.TextStyle(
                         fontSize: maxMainFontSize,
                         fontWeight: pw.FontWeight.normal,
                       ),
-                      textAlign: pw.TextAlign.left,
+                      textAlign: pw.TextAlign.justify, // Justifica o texto
                     ),
                   ),
                 ),
               // Adiciona o texto "authenticationCode"
-              if (codePlaceholder != null)
+              if (codeInfo != null)
                 pw.Positioned(
-                  left: codePosX,
-                  top: codePosY,
+                  left: codeInfo['posX'],
+                  top: codeInfo['posY'],
                   child: pw.Container(
-                    width: codeWidth,
-                    height: codeHeight,
+                    width: codeInfo['width'],
+                    height: codeInfo['height'],
                     alignment: pw.Alignment.center, // Centralizado
                     child: pw.Text(
-                      authenticationCode,
+                      authenticationCode.trim(),
                       style: pw.TextStyle(
                         fontSize: codeFontSize,
                         fontWeight: pw.FontWeight.normal,
                       ),
                       maxLines: 1,
-                      textAlign: pw.TextAlign.center, // Alinhamento centralizado
+                      textAlign:
+                          pw.TextAlign.center, // Alinhamento centralizado
                     ),
                   ),
                 ),
